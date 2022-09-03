@@ -15,6 +15,7 @@ class UnquestionifyInputDelegate extends Ui.BehaviorDelegate {
         var menu = new Ui.Menu();
         menu.addItem("Dismiss", :dismiss);
         menu.addItem("Dismiss All", :dismissAll);
+        menu.addItem("About", :aboutShow);
         Ui.pushView(menu, new BaseMenuDelegate(view), SLIDE_IMMEDIATE);
     }
 
@@ -64,6 +65,9 @@ class BaseMenuDelegate extends Ui.MenuInputDelegate {
         } else if (item == :dismissAll) {
             Sys.println("Dismiss all current notification");
             view.dismissAll();
+        }else if (item == :aboutShow){
+            Sys.println("About menuitem selected");
+            view.displayAbout();
         }
     }
 }

@@ -3,6 +3,7 @@ using Toybox.Graphics as Gfx;
 using Toybox.Communications as Comm;
 using Toybox.System as Sys;
 using Toybox.Timer as Timer;
+// using Toybox.Attention as Attention;
 
 // main app view
 (:glance)
@@ -15,12 +16,16 @@ class UnquestionifyView extends Ui.View {
     // we poll phone app to know if we have new notification (only when app is running obviously)
     // since it is not reliable for phone to send message to watch in CIQ
     hidden const POLL_PERIOD = 3 * 1000; //ms
+    hidden const READ_PERIOD = 8 * 1000; // ms
+    hidden const MAX_RETRY_COUNT = 5;  // request session failure max count before giving up.
     hidden var timer;
+    hidden var timerIdle;    // timer for user to read current message
     hidden var screenShape;
     hidden var screenWidth;
     hidden var screenHeight;
     hidden var bitmap; // the notification bitmap fetched from phone
     hidden var currentNotificationIndex = 0;
+    hidden var requestSessionAttemptFailureCount=0; 
 
     hidden const ip = "127.0.0.1";
 
@@ -39,6 +44,8 @@ class UnquestionifyView extends Ui.View {
     function initialize() {
         View.initialize();
         timer = new Timer.Timer();
+        timerIdle = new Timer.Timer();
+        
 
         // determine screen shape and dimesion
         var shape = Sys.getDeviceSettings().screenShape;
@@ -54,23 +61,29 @@ class UnquestionifyView extends Ui.View {
     }
 
     function onLayout(dc) {
-        fontHeight = dc.getFontHeight(Gfx.FONT_XTINY);
+        fontHeight = dc.getFontHeight(Gfx.FONT_SMALL);  // jin change from XTINY,  font size to be used at top/bottom zone
         linePos = screenWidth/2 - Math.sqrt((screenWidth/2)*(screenWidth/2)/2) - screenHeight/30;
     }
 
     function onShow() {
-        Sys.println("Mainview onShow()");
+        Sys.println("UnquestionifyWidgetView onShow()");
         shown = true;
         // when we are in overview page and we have notification, let's show the message
-        if (!isDetailView && currentNotifications.size() > 0) {
-            requestNotificationImage(getCurrentNotificationId());
+        if (!isDetailView && currentNotifications.size() >0) {
+             requestNotificationImage(getCurrentNotificationId());
         }
+        // start a timer, run onTimer() function once every POLL_PERIOD , repeat 
         timer.start(method(:onTimer), POLL_PERIOD, true);
+        // in case, user pressed select key on Summary view to enter this widgetView
+        // when it's previously showing a detailView, start TimerIdle .
+        restartTimerIdle();
     }
 
     function onHide() {
+        Sys.println("WidgetView.onHide() called");
         shown = false;
         timer.stop();
+        timerIdle.stop();  // jin
     }
 
     function onTimer() {
@@ -87,10 +100,12 @@ class UnquestionifyView extends Ui.View {
     }
 
     function drawNativeNotification(dc, text) {
-        // show current/totoal notification count
+        // show current/totol notification count
         dc.setColor(Gfx.COLOR_WHITE, Gfx.COLOR_TRANSPARENT);
-        dc.drawText(dc.getWidth()/2, dc.getHeight()/2, Gfx.FONT_SMALL,  text, Gfx.TEXT_JUSTIFY_CENTER | Gfx.TEXT_JUSTIFY_VCENTER);
-    }
+        dc.drawText(dc.getWidth()/2, dc.getHeight()/2, Gfx.FONT_LARGE,  text, Gfx.TEXT_JUSTIFY_CENTER | Gfx.TEXT_JUSTIFY_VCENTER);
+        // jin to start timerIdle 
+        restartTimerIdle();
+    } // jin change from TINY to LARGE
 
     function drawBitmapNotification(dc) {
         // set black background
@@ -101,20 +116,20 @@ class UnquestionifyView extends Ui.View {
             // no data, draw a horizontal line for no reason
             if (errmsg != null) {
                 // error case
-                Sys.println("Error:" + errmsg);
+                Sys.println(Ui.loadResource(Rez.Strings.Overview)+"\n"+ "Error:" + errmsg);
                 drawNativeNotification(dc, errmsg);
             } else if (!initialised) {
                 // will show only when app first starts
                 Sys.println("Loading...");
-                drawNativeNotification(dc, "Loading...");
+                drawNativeNotification(dc, Ui.loadResource(Rez.Strings.AppName)+"\nLoading...");
             } else {
                 // bitmap is null, no error, and initialised. That means images are loading or no notifications
                 var msg;
                 if (currentNotifications.size() == 0) {
-                    msg = "No Messages";
+                    msg = Ui.loadResource(Rez.Strings.Overview)+"\n"+ "No Messages\nPress 'Back' to quit";
                     drawNativeNotification(dc, msg);
                 } else {
-                    msg = "Loading\n" + currentNotifications.size() + " messages";
+                    msg = Ui.loadResource(Rez.Strings.Overview)+"\n"+"Loading\n" + currentNotifications.size() + " messages";
                     drawNativeNotification(dc, msg);
                 }
                 Sys.println(msg);
@@ -133,55 +148,89 @@ class UnquestionifyView extends Ui.View {
         dc.drawLine(0, linePos, screenWidth, linePos);
         dc.drawLine(0, dc.getHeight() - linePos, screenWidth, dc.getHeight() - linePos);
 
-        // detail view: show next/prev triangle
+        // detail view: show next/prev triangle at the top and/or bottom of screen outside bitmap area
         if (isDetailView) {
             // show message time (only on page 1 and last page)
             if (detailPage == 0) {
-                dc.setColor(0xbdffc9, Gfx.COLOR_TRANSPARENT);
-                dc.drawText(dc.getWidth()/2, linePos - fontHeight, Gfx.FONT_XTINY, getCurrentNotificationWhen(), Gfx.TEXT_JUSTIFY_CENTER);
+                dc.setColor(0xbdffc9, Gfx.COLOR_TRANSPARENT);  // jin change from FONT_XTINY to FONT_MEDIUM
+                dc.drawText(dc.getWidth()/2, linePos - fontHeight, Gfx.FONT_MEDIUM, getCurrentNotificationWhen(), Gfx.TEXT_JUSTIFY_CENTER);
             } else if (detailPage == detailPageCount - 1) {
                 dc.setColor(0xbdffc9, Gfx.COLOR_TRANSPARENT);
-                dc.drawText(dc.getWidth()/2, dc.getHeight() - linePos, Gfx.FONT_XTINY, getCurrentNotificationWhen(), Gfx.TEXT_JUSTIFY_CENTER);
+                dc.drawText(dc.getWidth()/2, dc.getHeight() - linePos, Gfx.FONT_MEDIUM, getCurrentNotificationWhen(), Gfx.TEXT_JUSTIFY_CENTER);
             }
             dc.setColor(0xffcb2e, Gfx.COLOR_TRANSPARENT);
             if (detailPage < detailPageCount - 1) {
-                // show next triangle
+                // show next triangle  at bottom
                 // lower point, upperleft, upperright
-                dc.fillPolygon([[dc.getWidth()/2, dc.getHeight() - 10],
-                                [dc.getWidth()/2 - 7, dc.getHeight() - 18],
-                                [dc.getWidth()/2 + 7, dc.getHeight() - 18]]);
+                dc.fillPolygon([[dc.getWidth()/2, dc.getHeight() - 1],
+                                [dc.getWidth()/2 - 12, dc.getHeight() - linePos+7],
+                                [dc.getWidth()/2 + 12, dc.getHeight() - linePos+7]]);
+
+                // left point, top right, bottom right
+                // dc.fillPolygon([[28, dc.getHeight()-linePos-7],
+                //                 [28, dc.getHeight()-linePos+7],
+                //                 [18, dc.getHeight()-linePos ]]);
             }
             if (detailPage > 0) {
-                // show prev triangle
+                // show prev triangle  at top 
                 // upper point, lowerleft, lowerright
-                dc.fillPolygon([[dc.getWidth()/2, 10],
-                                [dc.getWidth()/2 - 7, 18],
-                                [dc.getWidth()/2 + 7, 18]]);
+                dc.fillPolygon([[dc.getWidth()/2, 1],
+                                [dc.getWidth()/2 - 12,linePos-7],
+                                [dc.getWidth()/2 + 12, linePos-7]]);
+
+                // //  top ,left point, bottom right at position of fr735xt watch's left up arrow jin
+                // dc.fillPolygon([[18, dc.getHeight()/2-7],
+                //                 [8. dc.getHeight()/2],
+                //                 [18,dc.getHeight()/2 +7]]);
             }
-            // show left arrow
+            // show right arrow  , at the right side of fr735xt to indicate back operation jin
             // left point, upperright, lowerright
-            dc.fillPolygon([[10, dc.getHeight()/2],
-                            [18, dc.getHeight()/2 - 7],
-                            [18, dc.getHeight()/2 + 7]]);
+            // dc.fillPolygon([[10, dc.getHeight()/2],
+            //                 [18, dc.getHeight()/2 - 7],
+            //                 [18, dc.getHeight()/2 + 7]]);
+
+            // starting from right arrow head point, draw  a long right arrow pointing to back key
+            dc.fillPolygon([[dc.getWidth()-20, dc.getHeight()-linePos+7],
+                            [dc.getWidth()-35, dc.getHeight()-linePos ],
+                            [dc.getWidth()-35, dc.getHeight()-linePos+6 ],
+                            [dc.getWidth()-58, dc.getHeight()-linePos+6 ],
+                            [dc.getWidth()-58, dc.getHeight()-linePos+9],
+                            [dc.getWidth()-35, dc.getHeight()-linePos+9],
+                            [dc.getWidth()-35, dc.getHeight()-linePos + 14]]);
+            // dc.fillPolygon([[dc.getWidth()-38, dc.getHeight()-linePos-5],
+            //                     [dc.getWidth()-38, dc.getHeight()-linePos + 5],
+            //                     [dc.getWidth()-28, dc.getHeight()-linePos ]]);
             Sys.println("Detail Page " + (detailPage + 1) + "/" + detailPageCount);
         // overview: show current/total count
         } else {
             // show message time
-            dc.setColor(0xbdffc9, Gfx.COLOR_TRANSPARENT);
-            dc.drawText(dc.getWidth()/2, dc.getHeight() - linePos - fontHeight, Gfx.FONT_XTINY, getCurrentNotificationWhen(), Gfx.TEXT_JUSTIFY_CENTER);
-            // show app name on top
+            dc.setColor(0xbdffc9, Gfx.COLOR_TRANSPARENT);  // change from XTINY
+            dc.drawText(dc.getWidth()/2, dc.getHeight() - linePos - fontHeight, Gfx.FONT_MEDIUM, getCurrentNotificationWhen(), Gfx.TEXT_JUSTIFY_CENTER);
+            // // show app name on top
+            // dc.setColor(0xffecb8, Gfx.COLOR_TRANSPARENT);
+            // dc.drawText(dc.getWidth()/2, linePos - fontHeight, Gfx.FONT_XTINY, Ui.loadResource(Rez.Strings.AppName), Gfx.TEXT_JUSTIFY_CENTER);
+            // show "Overview" prompt on top
             dc.setColor(0xffecb8, Gfx.COLOR_TRANSPARENT);
-            dc.drawText(dc.getWidth()/2, linePos - fontHeight, Gfx.FONT_XTINY, Ui.loadResource(Rez.Strings.AppName), Gfx.TEXT_JUSTIFY_CENTER);
-            // show current/total notification count in overview page
-            dc.drawText(dc.getWidth()/2, dc.getHeight() - linePos, Gfx.FONT_XTINY,
+            dc.drawText(dc.getWidth()/2, linePos - fontHeight, Gfx.FONT_MEDIUM, Ui.loadResource(Rez.Strings.Overview), Gfx.TEXT_JUSTIFY_CENTER);
+            
+            // show current/total notification count in overview page, change from XTINY
+            dc.drawText(dc.getWidth()/2, dc.getHeight() - linePos, Gfx.FONT_MEDIUM,
                 (currentNotificationIndex + 1) + "/"+ currentNotifications.size(), Gfx.TEXT_JUSTIFY_CENTER);
             // if there are more than 1 page of text for this message, show right arrow
             if (detailPageCount > 0) {
                 dc.setColor(0xffcb2e, Gfx.COLOR_TRANSPARENT);
-                // right point, upperleft, lowerleft
-                dc.fillPolygon([[dc.getWidth()-10, dc.getHeight()/2],
-                                [dc.getWidth()-18, dc.getHeight()/2 - 7],
-                                [dc.getWidth()-18, dc.getHeight()/2 + 7]]);
+                 // starting from right arrow head point, draw  a long right arrow pointing to select key
+            dc.fillPolygon([[dc.getWidth()-15, linePos],
+                            [dc.getWidth()-30, linePos-7 ],
+                            [dc.getWidth()-30, linePos-2 ],
+                            [dc.getWidth()-50, linePos-2 ],
+                            [dc.getWidth()-50, linePos+2],
+                            [dc.getWidth()-30, linePos+2],
+                            [dc.getWidth()-30, linePos+7]]);
+                // right point, upperleft, lowerleft, small right triangle to select key
+                // dc.fillPolygon([[dc.getWidth()-28, linePos],
+                //                 [dc.getWidth()-38, linePos - 7],
+                //                 [dc.getWidth()-38, linePos + 7]]);
             }
         }
     }
@@ -200,7 +249,8 @@ class UnquestionifyView extends Ui.View {
         }
         return false; // means we are not entering detail view
     }
-
+// when showOverview return false, its caller UnquestionifyWidgetDelegate.onBack()
+// will be able to process its original goback function, go back to previous view
     function showOverview() {
         if (isDetailView) {
             isDetailView = false;
@@ -268,6 +318,13 @@ class UnquestionifyView extends Ui.View {
         }
     }
 
+    function displayAbout(){
+        setError( Ui.loadResource(Rez.Strings.AppName)+":\n"+
+        Ui.loadResource(Rez.Strings.Version) + Ui.loadResource(Rez.Strings.VersionValue) + "\n" +
+        Ui.loadResource(Rez.Strings.BuildDate) + Ui.loadResource(Rez.Strings.DateValue) ,
+         null);
+        Ui.requestUpdate();
+    }
     // UI update
     function onUpdate(dc) {
         drawBitmapNotification(dc);
@@ -282,8 +339,21 @@ class UnquestionifyView extends Ui.View {
     }
 
     function requestSession() {
-        System.println("Request session:" + screenWidth + "x" + screenHeight);
+        System.println("Request session:" + screenWidth + "x" + screenHeight+",Shape="+screenShape);
         errmsg = null;
+        
+        if(!Sys.getDeviceSettings().phoneConnected){
+            Sys.println("phoneConnected:false");
+            setError("No Phone Connection\n Pls enable \nBluetooth",null);
+            Ui.requestUpdate();
+             requestSessionAttemptFailureCount+=1;
+            if (requestSessionAttemptFailureCount>=MAX_RETRY_COUNT){  // quit
+                Sys.println("too many retry failure, watch is not connected, exit to previous view");
+                Ui.popView(SLIDE_RIGHT);
+            }
+            Sys.println("quit requestSession without trying");
+            return;
+        }
         Comm.makeWebRequest(
             "http://" + ip + ":8080/request_session",
             {
@@ -306,15 +376,23 @@ class UnquestionifyView extends Ui.View {
             Sys.println("=== session starts ===");
             requestNotificationCount();
             Ui.requestUpdate();
+            requestSessionAttemptFailureCount=0;    // clear communication error counter
         } else {
-            setError("Phone App\nUnreachable", json);
+            setError("Phone App\nSession Unavailable", json);
             Ui.requestUpdate();
             if (responseCode == 200) {
-                setError("Unexpected Data\nReceived", json);
+                setError("Unexpected Data\nReceived, no session key", json);
                 Sys.println("request session returned malformed data");
+                requestSessionAttemptFailureCount = 0;   // clear communication error counter
             } else {
                 setError("Phone App\nUnreachable", json);
                 Sys.println("request session failed. Response code:" + responseCode);
+                requestSessionAttemptFailureCount+=1;
+                if (requestSessionAttemptFailureCount>=MAX_RETRY_COUNT){  // quit
+                    Sys.println("too many retry failure, Phone App service not available, exit to previous view");
+                    // timer.stop();  no need here, because this view's onHide() will be called , in which timer.stop() is called.
+                    Ui.popView(SLIDE_RIGHT);
+                }
             }
         }
     }
@@ -376,10 +454,14 @@ class UnquestionifyView extends Ui.View {
                             // detail view
                             requestNotificationImageAtPage(getCurrentNotificationId(),
                                 detailPage, method(:onReceiveImage));
-                        } else {*/
-                            // overview
+                        } else {
+                        */
+                       if (currentNotifications.size()==1){  //jin added 
+                            showDetail();
+                       }
+                       else{
                             requestNotificationImage(getCurrentNotificationId());
-                        //}
+                       }
                     }
                 } else {
                     // changed to no notification
@@ -516,8 +598,30 @@ class UnquestionifyView extends Ui.View {
         } else {
             Sys.println("request image failed. Response code:" + responseCode);
         }
+        //  jin: start an non-repeat idle timer , allow  user to read the message,
+        // after the timer expires,  go back to previous screen, 
+        restartTimerIdle();
     }
 
+    function onTimerIdle(){
+        // go back to previous screen
+        Sys.println("OnTimerIdle expired");
+        
+
+        //Pop the current View from the View stack, 
+        // this will go back to UnquestionifyWidgetSummaryView,
+        // because this view is triggered by the function at above class
+        // # line 75 of function onSelect() {
+        //   Ui.pushView(mainview, new UnquestionifyInputDelegate(mainview), Ui.SLIDE_LEFT);
+        //}
+
+        Ui.popView(SLIDE_RIGHT);  
+    }
+
+    function restartTimerIdle(){
+        timerIdle.stop();
+        timerIdle.start(method(:onTimerIdle), READ_PERIOD, false);
+    }
     // requesting notification summary with width/height (for glance view)
     function requestNotificationSummaryImage(width, height, textSize) {
         errmsg = null;

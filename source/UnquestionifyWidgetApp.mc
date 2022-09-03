@@ -4,9 +4,8 @@ using Toybox.System as Sys;
 
 (:glance)
 class Unquestionify extends App.AppBase {
-
     hidden var view;
-
+    
     function initialize() {
         App.AppBase.initialize();
         view = new UnquestionifyView();
@@ -18,11 +17,13 @@ class Unquestionify extends App.AppBase {
 
     function getInitialView() {
         var deviceSettings = Sys.getDeviceSettings();
+        // Sys.println("deviceSettings="+deviceSettings);
         if (deviceSettings has :isGlanceModeEnabled && deviceSettings.isGlanceModeEnabled) {
             Sys.println("Has glance, go directly into main view");
             return [view, new UnquestionifyInputDelegate(view)];
         }
-        return [new UnquestionifyWidgetSummaryView(view), new UnquestionifySummaryInputDelegate(view)];
+        
+        return [new UnquestionifyWidgetSummaryView(view),  new UnquestionifySummaryInputDelegate(view)];
     }
 
     function getGlanceView() {
